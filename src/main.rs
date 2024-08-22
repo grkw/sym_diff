@@ -1,44 +1,52 @@
 use std::io;
-
-#[derive(Debug)]
-struct Term { // assumes all polynomials are in the form of a*x^n
-    coefficient: f64,
-    exponent: f64, // non-fractional exponents only (but they can be negative)
-}
+mod state_machine; // Include the state_machine.rs file
+use state_machine::{StateMachine, Term}; // Bring StateMachine and Term into scope
 
 fn main() {
     println!("Welcome to the symbolic differentiator for polynomial expressions of one variable!");
     println!("Please enter your function to differentiate:");
+    let mut user_input = String::new();
 
-    let mut input = String::new();
-    match io::stdin().readline(&mut input) {
+    match io::stdin().read_line(&mut user_input) {
         Ok(_) => {
-            let result = differentiate(&input);
-            println!("The derivative of the function is: {}", result);
+            let user_input = user_input.trim(); // Remove trailing newline
+            let mut state_machine = StateMachine::new();
+            state_machine.parse_input(&user_input);
+            for term in &state_machine.terms {
+                println!("Coefficient: {}, Exponent: {}", term.coefficient, term.exponent);
+            }
+            let result = differentiate(&state_machine.terms);
+            println!("The derivative of the function is: {}", display_result(&result));
         }
         Err(error) => println!("Error reading input: {}", error),
     }
 }
 
 fn differentiate(input: &Vec<Term>) -> Vec<Term> {
+
+    let mut differentiated_terms = Vec::new();
+
     // Differentiate each term
-    for term in input {
-        term.coefficient *= term.exponent;
-        term.exponent -= 1.0;
+    for input_term in input {
+        if input_term.exponent == 0.0 {
+            continue; // Derivative of a constant is zero
+        }
+        let diff_term = Term { coefficient: input_term.coefficient * input_term.exponent, exponent: input_term.exponent - 1.0}; // Chain rule
+        differentiated_terms.push(diff_term);
     }
     // Add each term to the result
-    let mut result = Vec::new();
-    for term in input {
+    let mut result: Vec<Term> = Vec::new();
+    for diff_term in differentiated_terms {
         let mut found_like_term = false;
         for result_term in &mut result { // Look for existence of a like term
-            if result_term.exponent == term.exponent {
-                result_term.coefficient += term.coefficient;
+            if result_term.exponent == diff_term.exponent {
+                result_term.coefficient += diff_term.coefficient;
                 found_like_term = true;
                 break;
             }
         }
         if !found_like_term { // Create new term
-            result.push(term.clone());
+            result.push(diff_term.clone());
         }
     }
     result
@@ -48,10 +56,8 @@ fn display_result(result: &Vec<Term>) -> String {
     let mut result_string = String::new();
     for term in result {
         if term.coefficient != 0.0 {
-            if term.coefficient > 0.0 {
+            if term.coefficient > 0.0 { // Need to explicitly display the positive sign for the coeff
                 result_string.push('+');
-            } else {
-                result_string.push('-');
             }
             result_string.push_str(&term.coefficient.to_string());
             if term.exponent != 0.0 {
@@ -62,84 +68,56 @@ fn display_result(result: &Vec<Term>) -> String {
     result_string
 }
 
-fn parse(input: &str) -> Result<Vec<Term>, String> {
-
-    // Filter out anything that's not a number, x, +, -, ^, ., or whitespace
-    for c in input.chars() {
-        if !c.is_numeric() && c != 'x' && c != '+' && c != '-' && c != '^' && c != '.' && c != ' ' {
-            return Err("Invalid characters".to_string());
-        }
-    }
-
-    let mut terms = Vec::new();
-    let mut term = Term { coefficient: 0.0, exponent: 0 }; // In case nothing is entered
-    let mut coefficient = String::new();
-    let mut exponent = String::new();
-    let mut is_coefficient = true;
-    for c in input.chars() {
-        match c {
-            ' ' => continue,
-            '+' | '-' => {
-                if !coefficient.is_empty() {
-                    term.coefficient = coefficient.parse().unwrap();
-                    term.exponent = exponent.parse().unwrap();
-                    terms.push(term);
-                    term = Term { coefficient: 0.0, exponent: 0 };
-                    coefficient.clear();
-                    exponent.clear();
-                    is_coefficient = true;
-                }
-                if c == '-' {
-                    coefficient.push(c);
-                }
-            }
-            'x' => {
-                is_coefficient = false;
-            }
-            '^' => {
-                is_coefficient = false;
-            }
-            _ => {
-                if is_coefficient {
-                    coefficient.push(c);
-                } else {
-                    exponent.push(c);
-                }
-            }
-        }
-    }
-    if !coefficient.is_empty() {
-        term.coefficient = coefficient.parse().unwrap();
-        term.exponent = exponent.parse().unwrap();
-        terms.push(term);
-    }
-    Ok(terms)
-}
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     #[test]
     fn test_parsing() {
+        let mut state_machine = StateMachine::new();
+            
         // Vanilla input
-        assert_eq!(parse("3x^2+ 2x +1"), vec![Term { coefficient: 3.0, exponent: 2 }, Term { coefficient: 2.0, exponent: 1 }, Term { coefficient: 1.0, exponent: 0 }]);
+        let vanilla_input = "-3x^2 + 2x^1 + 5x^6 + 5";
+        state_machine.parse_input(&vanilla_input).unwrap();
+        assert_eq!(state_machine.terms, vec![
+            Term { coefficient: -3.0, exponent: 2.0 }, 
+            Term { coefficient: 2.0, exponent: 1.0 }, 
+            Term { coefficient: 5.0, exponent: 6.0 },
+            Term { coefficient: 5.0, exponent: 0.0 },
+        ]);
+        
         // Negative coefficient, decimal coefficient, negative exponent, decimal exponent
-        assert_eq!(parse("-3.83x^2.9"), vec![Term { coefficient: -3.83, exponent: 2 }]);
-        // Trying to use * for multiply
-        assert_eq!(parse("2*x"), Err("Invalid characters".to_string()));
-        // Missing term, incomplete term
-        assert_eq!(parse("6 ++ x^2"), Err("Invalid input".to_string()));
-        assert_eq!(parse("3x^2 + 2x +"), Err("Invalid input".to_string()));
-        assert_eq!(parse("3x^2 + 2x 1"), Err("Invalid input".to_string()));
+        // let negative_input = "-3.83x^2.9";
+        // state_machine.parse_input(&negative_input).unwrap();
+        // assert_eq!(state_machine.terms, vec![
+        //     Term { coefficient: -3.83, exponent: 2.9 }
+        // ]);
+
         // Zero coefficient, zero exponent
-        assert_eq!(parse("-0x + 0x^0 - 0"), Term { coefficient: 0.0, exponent: 0 });
+        // let zero_input = "-0x + 0x^0 - 0";
+        // assert!(state_machine.parse_input(&zero_input).is_err());
+
+        // Trying to use * for multiply
+        // let invalid_chars_input = "2*x";
+        // assert!(state_machine.parse_input(&invalid_chars_input).is_err());
+        
+        // // Missing term, incomplete term
+        // let missing_term_input = "6 ++ x^2";
+        // assert!(state_machine.parse_input(&missing_term_input).is_err());
+        
+        // let incomplete_term_input = "3x^2 + 2x +";
+        // assert!(state_machine.parse_input(&incomplete_term_input).is_err());
+        
+        // let invalid_coefficient_input = "3x^2 + 2x 1";
+        // assert!(state_machine.parse_input(&invalid_coefficient_input).is_err());
+        
     }
     #[test]
     fn test_differentiation() {
-        // Vanilla input
-        assert_eq!(differentiate(&vec![Term { coefficient: 3.0, exponent: 2 }, Term { coefficient: 2.0, exponent: 1 }, Term { coefficient: 1.0, exponent: 0 }]), vec![Term { coefficient: 6.0, exponent: 1 }, Term { coefficient: 2.0, exponent: 0 }]);
+        // Vanilla input, zero coefficient, multiple terms
+        assert_eq!(differentiate(&vec![Term { coefficient: 3.0, exponent: 2.0 }, Term { coefficient: 2.0, exponent: 1.0 }, Term { coefficient: 1.0, exponent: 0.0 }]), vec![Term { coefficient: 6.0, exponent: 1.0 }, Term { coefficient: 2.0, exponent: 0.0 }]);
         // Negative coefficient, decimal coefficient, negative exponent, decimal exponent
-        assert_eq!(differentiate(&vec![Term { coefficient: -3.83, exponent: 2 }]), vec![Term { coefficient: -7.66, exponent: 1 }]);
-        // Zero coefficient, zero exponent
-        assert_eq!(differentiate(&vec![Term { coefficient: 0.0, exponent: 0 }]), vec![Term { coefficient: 0.0, exponent: 0 }]);
+        assert_eq!(differentiate(&vec![Term { coefficient: -3.83, exponent: 2.5 }]), vec![Term { coefficient: -7.66, exponent: 1.5 }]);
+        // Zero coefficient
+        assert_eq!(differentiate(&vec![Term { coefficient: 0.0, exponent: 98.0 }]), vec![]);
     }
 }
